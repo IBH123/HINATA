@@ -45,22 +45,30 @@ class ChartRenderer:
             subplot_titles=('', 'Volume')
         )
         
-        # Add candlestick chart
+        # Add enhanced candlestick chart with better styling
         candlestick = go.Candlestick(
             x=data['timestamp'],
             open=data['open'],
             high=data['high'], 
             low=data['low'],
             close=data['close'],
-            name='OHLC',
-            increasing=dict(line=dict(color=self.colors['bullish'])),
-            decreasing=dict(line=dict(color=self.colors['bearish']))
+            name='Price',
+            increasing=dict(
+                line=dict(color=self.colors['bullish'], width=1.5),
+                fillcolor=self.colors['bullish']
+            ),
+            decreasing=dict(
+                line=dict(color=self.colors['bearish'], width=1.5),
+                fillcolor=self.colors['bearish']
+            ),
+# Note: hovertemplate not supported for Candlestick traces
+            # Using default hover behavior
         )
         fig.add_trace(candlestick, row=1, col=1)
         
-        # Add volume bars
+        # Add enhanced volume bars with better coloring (convert to RGBA format)
         volume_colors = [
-            self.colors['bullish'] if close >= open else self.colors['bearish']
+            'rgba(0, 255, 136, 0.5)' if close >= open else 'rgba(255, 71, 87, 0.5)'
             for close, open in zip(data['close'], data['open'])
         ]
         
@@ -68,42 +76,92 @@ class ChartRenderer:
             x=data['timestamp'],
             y=data['volume'],
             name='Volume',
-            marker_color=volume_colors,
-            opacity=0.6
+            marker=dict(
+                color=volume_colors,
+                line=dict(width=0.5, color=self.colors['border'])
+            ),
+            opacity=0.8,
+            hovertemplate='<b>Volume</b><br>' +
+                         'Volume: %{y:,.0f}<br>' +
+                         'Time: %{x}<br>' +
+                         '<extra></extra>'
         )
         fig.add_trace(volume_bars, row=2, col=1)
         
-        # Update layout
+        # Update layout with enhanced styling
         fig.update_layout(
-            title=f"{symbol} - {timeframe.upper()} Chart",
+            title=dict(
+                text=f"<b>{symbol}</b> - {timeframe.upper()} Chart",
+                font=dict(size=24, color=self.colors['title']),
+                x=0.5,
+                xanchor='center'
+            ),
             height=height,
             template='plotly_dark',
             paper_bgcolor=self.colors['background'],
             plot_bgcolor=self.colors['paper'],
-            font=dict(color=self.colors['text']),
+            font=dict(color=self.colors['text'], size=12),
             xaxis_rangeslider_visible=False,
             showlegend=True,
             legend=dict(
                 orientation="h",
                 yanchor="bottom",
                 y=1.02,
-                xanchor="right",
-                x=1
-            )
+                xanchor="center",
+                x=0.5,
+                bgcolor='rgba(45, 45, 48, 0.8)',
+                bordercolor=self.colors['border'],
+                borderwidth=1,
+                font=dict(size=12, color=self.colors['text'])
+            ),
+            hovermode='x unified',
+            hoverlabel=dict(
+                bgcolor=self.colors['paper'],
+                bordercolor=self.colors['border'],
+                font=dict(color=self.colors['hover'], size=11)
+            ),
+            margin=dict(l=60, r=60, t=80, b=60)
         )
         
-        # Update axes
+        # Update axes with enhanced styling
         fig.update_xaxes(
             gridcolor=self.colors['grid'],
-            linecolor=self.colors['grid']
+            linecolor=self.colors['border'],
+            linewidth=1,
+            mirror=True,
+            ticks='outside',
+            tickcolor=self.colors['border'],
+            tickfont=dict(color=self.colors['text'], size=10),
+            title=dict(font=dict(color=self.colors['text'], size=12))
         )
         fig.update_yaxes(
             gridcolor=self.colors['grid'],
-            linecolor=self.colors['grid']
+            linecolor=self.colors['border'], 
+            linewidth=1,
+            mirror=True,
+            ticks='outside',
+            tickcolor=self.colors['border'],
+            tickfont=dict(color=self.colors['text'], size=10),
+            title=dict(font=dict(color=self.colors['text'], size=12))
         )
         
-        # Hide volume y-axis title
-        fig.update_yaxes(title_text="", row=2, col=1)
+        # Style the main price axis
+        fig.update_yaxes(
+            title_text="Price ($)",
+            tickformat='$.2f',
+            row=1, col=1
+        )
+        
+        # Style volume y-axis
+        fig.update_yaxes(
+            title_text="Volume",
+            tickformat=',',
+            row=2, col=1
+        )
+        
+        # Add support/resistance levels for visual context
+        sr_levels = self.calculate_support_resistance(data)
+        fig = self.add_support_resistance_lines(fig, sr_levels)
         
         return fig
     
@@ -121,8 +179,12 @@ class ChartRenderer:
                         y=ma,
                         mode='lines',
                         name=f'MA{period}',
-                        line=dict(color=color, width=1.5),
-                        opacity=0.8
+                        line=dict(color=color, width=2.5),
+                        opacity=0.9,
+                        hovertemplate=f'<b>MA{period}</b><br>' +
+                                     'Price: $%{y:.2f}<br>' +
+                                     'Time: %{x}<br>' +
+                                     '<extra></extra>'
                     ),
                     row=1, col=1
                 )
@@ -232,20 +294,21 @@ class ChartRenderer:
         }
     
     def _create_empty_chart(self, message: str = "No data") -> go.Figure:
-        """Create empty chart with message"""
+        """Create enhanced empty chart with message"""
         fig = go.Figure()
         fig.add_annotation(
-            text=message,
+            text=f"📊 {message}",
             xref="paper", yref="paper",
             x=0.5, y=0.5,
             showarrow=False,
-            font=dict(size=20, color=self.colors['text'])
+            font=dict(size=24, color=self.colors['text'])
         )
         fig.update_layout(
             template='plotly_dark',
             paper_bgcolor=self.colors['background'],
             plot_bgcolor=self.colors['paper'],
-            height=400
+            height=400,
+            font=dict(color=self.colors['text'])
         )
         return fig
     
@@ -276,3 +339,83 @@ class ChartRenderer:
             'support': support_levels,
             'resistance': resistance_levels
         }
+    
+    def add_support_resistance_lines(self, fig: go.Figure, sr_levels: Dict[str, List[float]]) -> go.Figure:
+        """Add support and resistance lines to the chart"""
+        # Add resistance lines
+        for level in sr_levels.get('resistance', []):
+            fig.add_hline(
+                y=level,
+                line=dict(
+                    color=self.ict_colors['resistance'],
+                    width=1.5,
+                    dash="dot"
+                ),
+                annotation=dict(
+                    text=f"R: ${level:.2f}",
+                    bgcolor=self.ict_colors['resistance'],
+                    bordercolor=self.colors['text'],
+                    font=dict(color='white', size=10)
+                ),
+                row=1, col=1
+            )
+        
+        # Add support lines
+        for level in sr_levels.get('support', []):
+            fig.add_hline(
+                y=level,
+                line=dict(
+                    color=self.ict_colors['support'],
+                    width=1.5,
+                    dash="dot"
+                ),
+                annotation=dict(
+                    text=f"S: ${level:.2f}",
+                    bgcolor=self.ict_colors['support'],
+                    bordercolor=self.colors['text'],
+                    font=dict(color='white', size=10)
+                ),
+                row=1, col=1
+            )
+        
+        return fig
+    
+    def add_price_action_annotations(self, fig: go.Figure, data: pd.DataFrame) -> go.Figure:
+        """Add price action annotations for key levels"""
+        if data.empty:
+            return fig
+        
+        latest = data.iloc[-1]
+        high_24h = data['high'].tail(24).max() if len(data) >= 24 else latest['high']
+        low_24h = data['low'].tail(24).min() if len(data) >= 24 else latest['low']
+        
+        # Add 24h high/low annotations
+        if high_24h > latest['close']:
+            fig.add_annotation(
+                x=data[data['high'] == high_24h]['timestamp'].iloc[-1],
+                y=high_24h,
+                text=f"🔺 24H High\n${high_24h:.2f}",
+                showarrow=True,
+                arrowhead=2,
+                arrowcolor=self.colors['bearish'],
+                bgcolor=self.colors['bearish'],
+                bordercolor=self.colors['text'],
+                font=dict(color='white', size=9),
+                row=1, col=1
+            )
+        
+        if low_24h < latest['close']:
+            fig.add_annotation(
+                x=data[data['low'] == low_24h]['timestamp'].iloc[-1],
+                y=low_24h,
+                text=f"🔻 24H Low\n${low_24h:.2f}",
+                showarrow=True,
+                arrowhead=2,
+                arrowcolor=self.colors['bullish'],
+                bgcolor=self.colors['bullish'],
+                bordercolor=self.colors['text'],
+                font=dict(color='white', size=9),
+                row=1, col=1
+            )
+        
+        return fig

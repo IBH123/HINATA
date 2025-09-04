@@ -84,6 +84,10 @@ class HinataApp:
         )
         selected_timeframe = timeframe_keys[selected_timeframe_idx]
         
+        # Check and warn about period/timeframe compatibility
+        compatibility = self.data_fetcher.get_period_interval_compatibility()
+        recommended_periods = compatibility.get(selected_timeframe, [])
+        
         # Data Period
         st.sidebar.subheader("Data Period")
         periods = {
@@ -103,6 +107,15 @@ class HinataApp:
             format_func=lambda x: periods[x],
             index=6  # Default to 1 year
         )
+        
+        # Show compatibility warning if needed
+        if recommended_periods and selected_period not in recommended_periods:
+            st.sidebar.warning(f"⚠️ {selected_period} period may not work optimally with {selected_timeframe} timeframe. Recommended periods: {', '.join(recommended_periods[:3])}")
+        
+        # Show timeframe-specific info
+        intraday_intervals = ['1m', '2m', '5m', '15m', '30m', '1h']
+        if selected_timeframe in intraday_intervals:
+            st.sidebar.info(f"📊 Intraday data: {selected_timeframe} intervals have limited historical range")
         
         # Overlay Controls (Phase 1: stubs)
         st.sidebar.subheader("📈 ICT Overlays")
@@ -131,7 +144,7 @@ class HinataApp:
     def load_data(self, symbol: str, period: str, timeframe: str):
         """Load data and update session state"""
         try:
-            with st.spinner(f"Loading {symbol} data..."):
+            with st.spinner(f"Loading {symbol} data ({period}/{timeframe})..."):
                 data = self.data_fetcher.fetch_ohlcv(symbol, period, timeframe)
                 
                 # Handle 4h timeframe resampling
@@ -139,46 +152,124 @@ class HinataApp:
                     hourly_data = self.data_fetcher.fetch_ohlcv(symbol, period, '1h')
                     data = self.data_fetcher.resample_data(hourly_data, '4h')
                 
+                if data.empty:
+                    st.error(f"No data available for {symbol} with {period} period and {timeframe} timeframe")
+                    return False
+                
                 st.session_state.current_data = data
                 st.session_state.current_symbol = symbol
                 st.session_state.current_timeframe = timeframe
                 
+                # Show enhanced data summary
+                data_range = f"{data['timestamp'].min().strftime('%Y-%m-%d %H:%M')} to {data['timestamp'].max().strftime('%Y-%m-%d %H:%M')}"
+                st.success(f"✅ Loaded **{len(data)}** candles for **{symbol}** | 🗺 Range: {data_range}")
                 self.logger.info(f"Loaded {len(data)} candles for {symbol}")
                 return True
                 
         except Exception as e:
-            st.error(f"Error loading data: {str(e)}")
-            self.logger.error(f"Data loading error: {str(e)}")
+            error_msg = str(e)
+            if "period" in error_msg.lower() and "interval" in error_msg.lower():
+                st.error(f"❌ **Timeframe Compatibility Issue**\n\n{error_msg}\n\n💡 **Tip:** Try a different period/timeframe combination for optimal results.")
+            else:
+                st.error(f"❌ **Error Loading Data**\n\n{error_msg}\n\n🔧 Please check your symbol or try again.")
+            self.logger.error(f"Data loading error: {error_msg}")
             return False
     
     def render_chart(self, data: pd.DataFrame, symbol: str, timeframe: str, overlays: dict):
-        """Render main chart"""
+        """Render enhanced main chart with additional features"""
         if data.empty:
-            st.warning("No data to display. Please select a symbol and click 'Load Data'.")
+            st.warning("📊 No data to display. Please select a symbol and click 'Load Data'.")
             return
         
-        # Create base chart
+        # Create analysis header info
+        header_info = self.chart_renderer.create_analysis_header(data, symbol)
+        
+        # Display key metrics above chart
+        if header_info:
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                price_color = "normal" if header_info['change'] == 0 else ("normal" if header_info['change'] > 0 else "inverse")
+                st.metric(
+                    label=f"💰 {symbol} Price",
+                    value=f"${header_info['current_price']:.2f}",
+                    delta=f"{header_info['change']:.2f} ({header_info['change_pct']:.1f}%)"
+                )
+            
+            with col2:
+                st.metric(
+                    label="📈 24H High",
+                    value=f"${header_info['high_24h']:.2f}"
+                )
+            
+            with col3:
+                st.metric(
+                    label="📉 24H Low", 
+                    value=f"${header_info['low_24h']:.2f}"
+                )
+            
+            with col4:
+                st.metric(
+                    label="📊 Volume",
+                    value=f"{header_info['volume']:,.0f}"
+                )
+        
+        # Create enhanced base chart
         fig = self.chart_renderer.create_candlestick_chart(
             data, symbol, timeframe, height=Config.CHART_HEIGHT
         )
+        
+        # Add price action annotations
+        fig = self.chart_renderer.add_price_action_annotations(fig, data)
         
         # Add overlays
         if overlays.get('moving_averages', False):
             fig = self.chart_renderer.add_moving_averages(fig, data)
         
-        # Display chart
-        st.plotly_chart(fig, use_container_width=True)
+        # Display enhanced chart
+        st.plotly_chart(fig, use_container_width=True, config={
+            'displayModeBar': True,
+            'displaylogo': False,
+            'modeBarButtonsToRemove': ['pan2d', 'lasso2d', 'select2d'],
+            'modeBarButtonsToAdd': ['drawline', 'drawopenpath', 'eraseshape']
+        })
         
-        # Chart statistics
+        # Chart analysis summary
+        with st.expander("📊 Chart Analysis", expanded=False):
+            if not data.empty:
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.subheader("📊 Technical Overview")
+                    
+                    # Price action summary
+                    latest = data.iloc[-1]
+                    prev_week = data.iloc[-7] if len(data) > 7 else data.iloc[0]
+                    week_change = latest['close'] - prev_week['close']
+                    week_change_pct = (week_change / prev_week['close']) * 100 if prev_week['close'] != 0 else 0
+                    
+                    st.write(f"**Weekly Change:** ${week_change:.2f} ({week_change_pct:.1f}%)")
+                    st.write(f"**Average Volume:** {data['volume'].mean():,.0f}")
+                    st.write(f"**Price Volatility:** {((data['high'] - data['low']) / data['close']).mean() * 100:.1f}%")
+                
+                with col2:
+                    st.subheader("🎢 Support & Resistance")
+                    
+                    # Calculate and display S/R levels
+                    sr_levels = self.chart_renderer.calculate_support_resistance(data)
+                    
+                    if sr_levels['resistance']:
+                        st.write(f"**Resistance:** ${sr_levels['resistance'][-1]:.2f}")
+                    if sr_levels['support']:
+                        st.write(f"**Support:** ${sr_levels['support'][-1]:.2f}")
+                    
+                    st.write(f"**Data Points:** {len(data)} candles")
+                    st.write(f"**Timeframe:** {timeframe.upper()}")
+        
+        # Original metrics code moved up above chart (removed from here)
         col1, col2, col3, col4 = st.columns(4)
         
-        if not data.empty:
-            latest = data.iloc[-1]
-            prev = data.iloc[-2] if len(data) > 1 else latest
-            
-            change = latest['close'] - prev['close']
-            change_pct = (change / prev['close']) * 100 if prev['close'] != 0 else 0
-            
+        if False:  # Disable original metrics display
             with col1:
                 st.metric(
                     "Current Price", 
